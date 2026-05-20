@@ -1,0 +1,14 @@
+# 训练核心配置
+epochs: 100
+batch_size: 64
+lr: 0.001
+scale: 4
+num_workers: 2
+
+# 损失函数权重
+mse_weight: 0.8
+perceptual_weight: 0.2
+
+# 数据配置
+hr_size: 96
+train_ratio: 0.9

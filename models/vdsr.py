@@ -1,20 +1,20 @@
-import torch
-import torch.nn as nn
+import paddle
+import paddle.nn as nn
 
-class VDSR(nn.Module):
+class VDSR(nn.Layer):
     def __init__(self, num_channels=3, upscale_factor=4, num_layers=20):
         super(VDSR, self).__init__()
         self.upscale_factor = upscale_factor
         
         layers = []
-        layers.append(nn.Conv2d(num_channels, 64, kernel_size=3, padding=1))
-        layers.append(nn.ReLU(inplace=True))
+        layers.append(nn.Conv2D(num_channels, 64, kernel_size=3, padding=1))
+        layers.append(nn.ReLU())
         
         for _ in range(num_layers - 2):
-            layers.append(nn.Conv2d(64, 64, kernel_size=3, padding=1))
-            layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Conv2D(64, 64, kernel_size=3, padding=1))
+            layers.append(nn.ReLU())
         
-        layers.append(nn.Conv2d(64, num_channels, kernel_size=3, padding=1))
+        layers.append(nn.Conv2D(64, num_channels, kernel_size=3, padding=1))
         self.body = nn.Sequential(*layers)
     
     def forward(self, x):

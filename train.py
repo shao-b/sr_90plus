@@ -1,10 +1,10 @@
 import os
 import yaml
-import torch
+import paddle
 import logging
 import argparse
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+from paddle.io import DataLoader
+from visualdl import LogWriter
 from tqdm import tqdm
 
 from utils import SRDataset, MixedLoss, calculate_psnr
@@ -35,10 +35,11 @@ def main():
         ]
     )
     logger = logging.getLogger()
-    writer = SummaryWriter(f'logs/{args.model}/tensorboard')
+    writer = LogWriter(f'logs/{args.model}/visualdl')
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f'使用设备: {device}')
+    place = paddle.CUDAPlace(0) if paddle.is_compiled_with_cuda() else paddle.CPUPlace()
+    paddle.set_device(place)
+    logger.info(f'使用设备: {place}')
     
     train_dataset = SRDataset('data/train_lr.npy', 'data/train_hr.npy', augment=True)
     val_dataset = SRDataset('data/val_lr.npy', 'data/val_hr.npy', augment=False)
@@ -51,20 +52,21 @@ def main():
         'vdsr': VDSR,
         'se_espcn': SE_ESPCN
     }
-    model = model_dict[args.model](upscale_factor=config['scale']).to(device)
+    model = model_dict[args.model](upscale_factor=config['scale'])
     
     start_epoch = 0
     best_psnr = 0.0
     if args.resume:
-        checkpoint = torch.load(args.resume)
-        model.load_state_dict(checkpoint['model'])
+        checkpoint = paddle.load(args.resume)
+        model.set_state_dict(checkpoint['model'])
         start_epoch = checkpoint['epoch']
         best_psnr = checkpoint['best_psnr']
         logger.info(f'从epoch {start_epoch} 继续训练')
     
-    criterion = MixedLoss(device, mse_weight=config['mse_weight'], perceptual_weight=config['perceptual_weight'])
-    optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
+    criterion = MixedLoss(mse_weight=config['mse_weight'], perceptual_weight=config['perceptual_weight'])
+    optimizer = paddle.optimizer.Adam(learning_rate=config['lr'], parameters=model.parameters())
+    scheduler = paddle.optimizer.lr.CosineAnnealingDecay(config['lr'], T_max=config['epochs'])
+    optimizer.set_lr_scheduler(scheduler)
     
     for epoch in range(start_epoch, config['epochs']):
         model.train()
@@ -72,29 +74,27 @@ def main():
         pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{config["epochs"]}')
         
         for lr_imgs, hr_imgs in pbar:
-            lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
-            optimizer.zero_grad()
             outputs = model(lr_imgs)
             loss = criterion(outputs, hr_imgs)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            paddle.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            optimizer.clear_grad()
             
-            train_loss += loss.item() * lr_imgs.size(0)
+            train_loss += loss.item() * lr_imgs.shape[0]
             pbar.set_postfix({'loss': loss.item()})
         
         train_loss /= len(train_loader.dataset)
         
         model.eval()
         val_psnr = 0.0
-        with torch.no_grad():
+        with paddle.no_grad():
             for lr_imgs, hr_imgs in val_loader:
-                lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
                 outputs = model(lr_imgs)
-                outputs = torch.clamp(outputs, 0.0, 1.0)
+                outputs = paddle.clip(outputs, 0.0, 1.0)
                 
-                hr_np = hr_imgs.permute(0, 2, 3, 1).cpu().numpy()
-                output_np = outputs.permute(0, 2, 3, 1).cpu().numpy()
+                hr_np = hr_imgs.transpose([0, 2, 3, 1]).numpy()
+                output_np = outputs.transpose([0, 2, 3, 1]).numpy()
                 for i in range(hr_np.shape[0]):
                     val_psnr += calculate_psnr(hr_np[i], output_np[i])
         
@@ -103,24 +103,24 @@ def main():
         logger.info(f'Epoch {epoch+1}, Train Loss: {train_loss:.6f}, Val PSNR: {val_psnr:.2f} dB')
         writer.add_scalar('Loss/train', train_loss, epoch+1)
         writer.add_scalar('PSNR/val', val_psnr, epoch+1)
-        writer.add_scalar('LR', optimizer.param_groups[0]['lr'], epoch+1)
+        writer.add_scalar('LR', optimizer.get_lr(), epoch+1)
         
         if val_psnr > best_psnr:
             best_psnr = val_psnr
-            torch.save({
+            paddle.save({
                 'epoch': epoch+1,
                 'model': model.state_dict(),
                 'best_psnr': best_psnr,
                 'optimizer': optimizer.state_dict(),
-            }, f'weights/{args.model}/best.pth')
+            }, f'weights/{args.model}/best.pdparams')
             logger.info(f'保存最优模型，PSNR: {best_psnr:.2f} dB')
         
-        torch.save({
+        paddle.save({
             'epoch': epoch+1,
             'model': model.state_dict(),
             'best_psnr': best_psnr,
             'optimizer': optimizer.state_dict(),
-        }, f'weights/{args.model}/latest.pth')
+        }, f'weights/{args.model}/latest.pdparams')
         
         scheduler.step()
     

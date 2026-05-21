@@ -1,5 +1,5 @@
-import torch
-from torch.utils.data import Dataset
+import paddle
+from paddle.io import Dataset
 import numpy as np
 
 class SRDataset(Dataset):
@@ -26,6 +26,6 @@ class SRDataset(Dataset):
             lr = np.rot90(lr, k)
             hr = np.rot90(hr, k)
         
-        lr = torch.from_numpy(lr).permute(2, 0, 1).float() / 255.0
-        hr = torch.from_numpy(hr).permute(2, 0, 1).float() / 255.0
+        lr = paddle.to_tensor(lr).transpose([2, 0, 1]).astype('float32') / 255.0
+        hr = paddle.to_tensor(hr).transpose([2, 0, 1]).astype('float32') / 255.0
         return lr, hr

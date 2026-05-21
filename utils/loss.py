@@ -1,14 +1,14 @@
-import torch
-import torch.nn as nn
-from torchvision import models
+import paddle
+import paddle.nn as nn
+from paddle.vision import models
 
-class PerceptualLoss(nn.Module):
-    def __init__(self, device):
+class PerceptualLoss(nn.Layer):
+    def __init__(self):
         super(PerceptualLoss, self).__init__()
-        vgg = models.vgg19(pretrained=True).features.to(device)
+        vgg = models.vgg19(pretrained=True).features
         self.vgg_layers = vgg[:10].eval()
         for param in self.vgg_layers.parameters():
-            param.requires_grad = False
+            param.stop_gradient = True
         self.mse = nn.MSELoss()
     
     def forward(self, x, y):
@@ -16,11 +16,11 @@ class PerceptualLoss(nn.Module):
         y_features = self.vgg_layers(y)
         return self.mse(x_features, y_features)
 
-class MixedLoss(nn.Module):
-    def __init__(self, device, mse_weight=0.8, perceptual_weight=0.2):
+class MixedLoss(nn.Layer):
+    def __init__(self, mse_weight=0.8, perceptual_weight=0.2):
         super(MixedLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
-        self.perceptual_loss = PerceptualLoss(device)
+        self.perceptual_loss = PerceptualLoss()
         self.mse_weight = mse_weight
         self.perceptual_weight = perceptual_weight
     

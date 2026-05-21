@@ -1,16 +1,16 @@
-import torch
-import torch.nn as nn
+import paddle
+import paddle.nn as nn
 
-class ESPCN(nn.Module):
+class ESPCN(nn.Layer):
     def __init__(self, num_channels=3, upscale_factor=4):
         super(ESPCN, self).__init__()
-        self.conv1 = nn.Conv2d(num_channels, 64, kernel_size=5, padding=2)
-        self.relu1 = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.relu2 = nn.ReLU(inplace=True)
-        self.conv3 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.relu3 = nn.ReLU(inplace=True)
-        self.conv4 = nn.Conv2d(32, num_channels * (upscale_factor ** 2), kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2D(num_channels, 64, kernel_size=5, padding=2)
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv2D(64, 64, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        self.conv3 = nn.Conv2D(64, 32, kernel_size=3, padding=1)
+        self.relu3 = nn.ReLU()
+        self.conv4 = nn.Conv2D(32, num_channels * (upscale_factor ** 2), kernel_size=3, padding=1)
         self.pixel_shuffle = nn.PixelShuffle(upscale_factor)
     
     def forward(self, x):

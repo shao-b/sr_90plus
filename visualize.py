@@ -1,12 +1,12 @@
 import os
-import torch
+import paddle
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 
 from models import SRCNN, ESPCN, VDSR, SE_ESPCN
 
-def visualize_single_image(img_path, models, device, save_path):
+def visualize_single_image(img_path, models, save_path):
     hr = Image.open(img_path).convert('RGB')
     w, h = hr.size
     w = (w // 4) * 4
@@ -14,18 +14,18 @@ def visualize_single_image(img_path, models, device, save_path):
     hr = hr.crop((0, 0, w, h))
     lr = hr.resize((w//4, h//4), Image.BICUBIC)
     
-    lr_tensor = torch.from_numpy(np.array(lr)).permute(2, 0, 1).float() / 255.0
-    lr_tensor = lr_tensor.unsqueeze(0).to(device)
+    lr_tensor = paddle.to_tensor(np.array(lr)).transpose([2, 0, 1]).astype('float32') / 255.0
+    lr_tensor = lr_tensor.unsqueeze(0)
     
-    with torch.no_grad():
-        bicubic = torch.nn.functional.interpolate(lr_tensor, scale_factor=4, mode='bicubic', align_corners=False)
+    with paddle.no_grad():
+        bicubic = paddle.nn.functional.interpolate(lr_tensor, scale_factor=4, mode='bicubic', align_corners=False)
         srcnn_out = models['srcnn'](lr_tensor)
         espcn_out = models['espcn'](lr_tensor)
         vdsr_out = models['vdsr'](lr_tensor)
         se_espcn_out = models['se_espcn'](lr_tensor)
     
     def tensor2img(tensor):
-        img = tensor.squeeze().permute(1, 2, 0).cpu().numpy()
+        img = tensor.squeeze().transpose([1, 2, 0]).numpy()
         img = np.clip(img, 0.0, 1.0)
         return (img * 255).astype(np.uint8)
     
@@ -73,18 +73,19 @@ def visualize_single_image(img_path, models, device, save_path):
     plt.close()
 
 def main():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    place = paddle.CUDAPlace(0) if paddle.is_compiled_with_cuda() else paddle.CPUPlace()
+    paddle.set_device(place)
     
     models = {
-        'srcnn': SRCNN(upscale_factor=4).to(device),
-        'espcn': ESPCN(upscale_factor=4).to(device),
-        'vdsr': VDSR(upscale_factor=4).to(device),
-        'se_espcn': SE_ESPCN(upscale_factor=4).to(device)
+        'srcnn': SRCNN(upscale_factor=4),
+        'espcn': ESPCN(upscale_factor=4),
+        'vdsr': VDSR(upscale_factor=4),
+        'se_espcn': SE_ESPCN(upscale_factor=4)
     }
     
     for name in models:
-        checkpoint = torch.load(f'weights/{name}/best.pth')
-        models[name].load_state_dict(checkpoint['model'])
+        checkpoint = paddle.load(f'weights/{name}/best.pdparams')
+        models[name].set_state_dict(checkpoint['model'])
         models[name].eval()
     
     test_images = [
@@ -101,7 +102,7 @@ def main():
             continue
         img_name = os.path.basename(img_path)
         save_path = f'results/visualization/{img_name}'
-        visualize_single_image(img_path, models, device, save_path)
+        visualize_single_image(img_path, models, save_path)
         print(f'生成对比图: {save_path}')
 
 if __name__ == '__main__':

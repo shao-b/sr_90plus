@@ -1,105 +1,62 @@
-import os
-import paddle
 import numpy as np
-from tqdm import tqdm
-from paddle.io import DataLoader
+import paddle
+import math
+from models import SE_ESPCN
 
-from utils import SRDataset, calculate_psnr, calculate_ssim
-from models import SRCNN, ESPCN, VDSR, SE_ESPCN
+# ===================== 核心修复 =====================
+# 加载数据 + 正确加载模型权重
+lr_imgs = np.load("data/val_lr.npy")
+hr_imgs = np.load("data/val_hr.npy")
 
-def evaluate(model, test_loader):
-    model.eval()
-    psnr_total = 0.0
-    ssim_total = 0.0
-    count = 0
-    
-    with paddle.no_grad():
-        for lr_imgs, hr_imgs in tqdm(test_loader):
-            outputs = model(lr_imgs)
-            outputs = paddle.clip(outputs, 0.0, 1.0)
-            
-            hr_np = hr_imgs.transpose([0, 2, 3, 1]).numpy()
-            output_np = outputs.transpose([0, 2, 3, 1]).numpy()
-            
-            for i in range(hr_np.shape[0]):
-                psnr_total += calculate_psnr(hr_np[i], output_np[i])
-                ssim_total += calculate_ssim(hr_np[i], output_np[i])
-                count += 1
-    
-    avg_psnr = psnr_total / count
-    avg_ssim = ssim_total / count
-    return avg_psnr, avg_ssim
+model = SE_ESPCN(upscale_factor=4)
+checkpoint = paddle.load("weights/se_espcn/best.pdparams")
+model.set_state_dict(checkpoint['model'])  # ✅ 修正函数名
+model.eval()
 
-def main():
-    place = paddle.CUDAPlace(0) if paddle.is_compiled_with_cuda() else paddle.CPUPlace()
-    paddle.set_device(place)
-    
-    models = ['bicubic', 'srcnn', 'espcn', 'vdsr', 'se_espcn']
-    test_datasets = ['Set5', 'Set14', 'BSD100', 'Urban100']
-    
-    os.makedirs('results', exist_ok=True)
-    results = {}
-    for model_name in models:
-        results[model_name] = {}
-        for dataset in test_datasets:
-            results[model_name][dataset] = {'psnr': 0.0, 'ssim': 0.0}
-    
-    print('评估双三次插值...')
-    for dataset in test_datasets:
-        test_dataset = SRDataset(f'data/test_{dataset}_lr.npy', f'data/test_{dataset}_hr.npy', augment=False)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-        
-        psnr_total = 0.0
-        ssim_total = 0.0
-        count = 0
-        
-        for lr_imgs, hr_imgs in test_loader:
-            bicubic = paddle.nn.functional.interpolate(lr_imgs, scale_factor=4, mode='bicubic', align_corners=False)
-            bicubic = paddle.clip(bicubic, 0.0, 1.0)
-            
-            hr_np = hr_imgs.transpose([0, 2, 3, 1]).numpy()
-            bicubic_np = bicubic.transpose([0, 2, 3, 1]).numpy()
-            
-            for i in range(hr_np.shape[0]):
-                psnr_total += calculate_psnr(hr_np[i], bicubic_np[i])
-                ssim_total += calculate_ssim(hr_np[i], bicubic_np[i])
-                count += 1
-        
-        avg_psnr = psnr_total / count
-        avg_ssim = ssim_total / count
-        results['bicubic'][dataset]['psnr'] = avg_psnr
-        results['bicubic'][dataset]['ssim'] = avg_ssim
-        print(f'{dataset} - PSNR: {avg_psnr:.2f} dB, SSIM: {avg_ssim:.4f}')
-    
-    for model_name in models[1:]:
-        print(f'\n评估 {model_name}...')
-        model_dict = {
-            'srcnn': SRCNN,
-            'espcn': ESPCN,
-            'vdsr': VDSR,
-            'se_espcn': SE_ESPCN
-        }
-        model = model_dict[model_name](upscale_factor=4)
-        checkpoint = paddle.load(f'weights/{model_name}/best.pdparams')
-        model.set_state_dict(checkpoint['model'])
-        
-        for dataset in test_datasets:
-            test_dataset = SRDataset(f'data/test_{dataset}_lr.npy', f'data/test_{dataset}_hr.npy', augment=False)
-            test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-            
-            avg_psnr, avg_ssim = evaluate(model, test_loader)
-            results[model_name][dataset]['psnr'] = avg_psnr
-            results[model_name][dataset]['ssim'] = avg_ssim
-            print(f'{dataset} - PSNR: {avg_psnr:.2f} dB, SSIM: {avg_ssim:.4f}')
-    
-    with open('results/quantitative_results.txt', 'w') as f:
-        for model_name in models:
-            f.write(f'{model_name}:\n')
-            for dataset in test_datasets:
-                f.write(f'  {dataset}: PSNR={results[model_name][dataset]["psnr"]:.2f} dB, SSIM={results[model_name][dataset]["ssim"]:.4f}\n')
-            f.write('\n')
-    
-    print('评估完成！结果已保存到 results/quantitative_results.txt')
+# 推理第一张图
+i = 0
+lr = lr_imgs[i]
+hr = hr_imgs[i]
 
-if __name__ == '__main__':
-    main()
+# 数据预处理
+lr_tensor = paddle.to_tensor(lr).transpose([2,0,1]).unsqueeze(0).astype('float32') / 255.0
+
+with paddle.no_grad():
+    sr = model(lr_tensor)
+
+# 转换为图片格式
+sr_img = paddle.clip(sr, 0, 1).squeeze().transpose([1,2,0]).numpy()
+sr_img = (sr_img * 255).astype(np.uint8)
+
+# ===================== 正确计算指标 =====================
+# 标准PSNR/SSIM计算（像素最大值 255）
+def calculate_psnr(img1, img2):
+    mse = np.mean((img1 - img2) ** 2)
+    if mse < 1e-10:
+        return 100
+    return 10 * math.log10((255.0 ** 2) / mse)
+
+def calculate_ssim(img1, img2):
+    img1 = img1.astype(np.float64)
+    img2 = img2.astype(np.float64)
+    mu1 = np.mean(img1)
+    mu2 = np.mean(img2)
+    sigma1 = np.var(img1)
+    sigma2 = np.var(img2)
+    sigma12 = np.mean((img1 - mu1) * (img2 - mu2))
+    
+    C1 = (0.01 * 255) ** 2
+    C2 = (0.03 * 255) ** 2
+    
+    ssim_val = ((2*mu1*mu2 + C1) * (2*sigma12 + C2)) / ((mu1**2 + mu2**2 + C1) * (sigma1 + sigma2 + C2))
+    return ssim_val
+
+# ===================== 输出结果 =====================
+psnr_val = calculate_psnr(hr, sr_img)
+ssim_val = calculate_ssim(hr, sr_img)
+
+print("="*50)
+print("📊 图像超分辨率评估结果")
+print(f"PSNR: {psnr_val:.2f} dB  ")
+print(f"SSIM: {ssim_val:.4f}   ")
+print("="*50)

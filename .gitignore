@@ -1,0 +1,23 @@
+# 大文件和数据集
+data/*.npy
+data/val/*.png
+data/train/*.png
+weights/*.pdparams
+weights/*.pdopt
+*.pth
+*.pt
+
+# 临时文件和输出
+results/*.png
+results/*.jpg
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.ipynb_checkpoints
+*.log
+*.tmp
+
+# 系统文件
+.DS_Store
+Thumbs.db

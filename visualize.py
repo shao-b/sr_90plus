@@ -2,108 +2,42 @@ import os
 import paddle
 import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
+from models import SE_ESPCN
 
-from models import SRCNN, ESPCN, VDSR, SE_ESPCN
-
-def visualize_single_image(img_path, models, save_path):
-    hr = Image.open(img_path).convert('RGB')
-    w, h = hr.size
-    w = (w // 4) * 4
-    h = (h // 4) * 4
-    hr = hr.crop((0, 0, w, h))
-    lr = hr.resize((w//4, h//4), Image.BICUBIC)
-    
-    lr_tensor = paddle.to_tensor(np.array(lr)).transpose([2, 0, 1]).astype('float32') / 255.0
-    lr_tensor = lr_tensor.unsqueeze(0)
-    
-    with paddle.no_grad():
-        bicubic = paddle.nn.functional.interpolate(lr_tensor, scale_factor=4, mode='bicubic', align_corners=False)
-        srcnn_out = models['srcnn'](lr_tensor)
-        espcn_out = models['espcn'](lr_tensor)
-        vdsr_out = models['vdsr'](lr_tensor)
-        se_espcn_out = models['se_espcn'](lr_tensor)
-    
-    def tensor2img(tensor):
-        img = tensor.squeeze().transpose([1, 2, 0]).numpy()
-        img = np.clip(img, 0.0, 1.0)
-        return (img * 255).astype(np.uint8)
-    
-    bicubic_img = tensor2img(bicubic)
-    srcnn_img = tensor2img(srcnn_out)
-    espcn_img = tensor2img(espcn_out)
-    vdsr_img = tensor2img(vdsr_out)
-    se_espcn_img = tensor2img(se_espcn_out)
-    hr_img = np.array(hr)
-    
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    axes[0,0].imshow(lr.resize((w, h), Image.NEAREST))
-    axes[0,0].set_title('Low Resolution (x4 Upsampled)', fontsize=14)
-    axes[0,1].imshow(bicubic_img)
-    axes[0,1].set_title('Bicubic', fontsize=14)
-    axes[0,2].imshow(srcnn_img)
-    axes[0,2].set_title('SRCNN', fontsize=14)
-    axes[1,0].imshow(espcn_img)
-    axes[1,0].set_title('ESPCN', fontsize=14)
-    axes[1,1].imshow(vdsr_img)
-    axes[1,1].set_title('VDSR', fontsize=14)
-    axes[1,2].imshow(se_espcn_img)
-    axes[1,2].set_title('Ours (SE-ESPCN)', fontsize=14)
-    
-    for ax in axes.flat:
-        ax.axis('off')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    crop_x, crop_y, crop_size = min(100, w//4), min(100, h//4), min(100, w//4)
-    fig, axes = plt.subplots(1, 6, figsize=(24, 4))
-    imgs = [lr.resize((w, h), Image.NEAREST), bicubic_img, srcnn_img, espcn_img, vdsr_img, se_espcn_img]
-    titles = ['LR', 'Bicubic', 'SRCNN', 'ESPCN', 'VDSR', 'Ours']
-    
-    for i, (img, title) in enumerate(zip(imgs, titles)):
-        crop = img[crop_y:crop_y+crop_size, crop_x:crop_x+crop_size]
-        axes[i].imshow(crop)
-        axes[i].set_title(title, fontsize=14)
-        axes[i].axis('off')
-    
-    plt.tight_layout()
-    plt.savefig(save_path.replace('.png', '_crop.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-
+# 核心函数：直接从npy数组画图，不读取任何图片文件
 def main():
-    place = paddle.CUDAPlace(0) if paddle.is_compiled_with_cuda() else paddle.CPUPlace()
-    paddle.set_device(place)
+    # 1. 加载模型
+    model = SE_ESPCN(upscale_factor=4)
+    checkpoint = paddle.load('weights/se_espcn/best.pdparams')
+    model.set_state_dict(checkpoint['model'])
+    model.eval()
+
+    # 2. 直接加载你的验证集npy（唯一路径，绝对存在！）
+    lr_imgs = np.load("data/val_lr.npy")
+    hr_imgs = np.load("data/val_hr.npy")
     
-    models = {
-        'srcnn': SRCNN(upscale_factor=4),
-        'espcn': ESPCN(upscale_factor=4),
-        'vdsr': VDSR(upscale_factor=4),
-        'se_espcn': SE_ESPCN(upscale_factor=4)
-    }
+    # 取第一张图
+    lr = lr_imgs[0:1]  # 模型输入
+    hr = hr_imgs[0]
+
+    # 3. 模型推理
+    with paddle.no_grad():
+        sr = model(paddle.to_tensor(lr))
     
-    for name in models:
-        checkpoint = paddle.load(f'weights/{name}/best.pdparams')
-        models[name].set_state_dict(checkpoint['model'])
-        models[name].eval()
+    # 4. 转换为图片格式
+    lr_img = lr[0].transpose(1,2,0)
+    sr_img = paddle.clip(sr, 0, 1).numpy()[0].transpose(1,2,0)
+
+    # 5. 画图保存
+    plt.figure(figsize=(15,5))
+    plt.subplot(131), plt.imshow(lr_img), plt.title('低分辨率'), plt.axis('off')
+    plt.subplot(132), plt.imshow(sr_img), plt.title('SE-ESPCN超分结果'), plt.axis('off')
+    plt.subplot(133), plt.imshow(hr), plt.title('高清原图'), plt.axis('off')
     
-    test_images = [
-        'data/test/Set5/butterfly.png',
-        'data/test/Set14/barbara.png',
-        'data/test/BSD100/3096.jpg',
-        'data/test/Urban100/img_001.png',
-        'data/test/Urban100/img_072.png'
-    ]
-    
-    os.makedirs('results/visualization', exist_ok=True)
-    for img_path in test_images:
-        if not os.path.exists(img_path):
-            continue
-        img_name = os.path.basename(img_path)
-        save_path = f'results/visualization/{img_name}'
-        visualize_single_image(img_path, models, save_path)
-        print(f'生成对比图: {save_path}')
+    os.makedirs('results', exist_ok=True)
+    plt.savefig('results/result.png', dpi=300)
+    plt.close()
+    print("✅ 效果图生成成功！路径：results/result1.png")
 
 if __name__ == '__main__':
     main()
